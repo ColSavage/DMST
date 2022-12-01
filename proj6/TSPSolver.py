@@ -80,8 +80,62 @@ class TSPSolver:
 	'''
 
 	def greedy(self, time_allowance=60.0):
+		results = {}
 
-		pass
+		cities = self._scenario.getCities()
+		ncities = len(cities)
+		count = 1
+		bssf = None
+		start_time = time.time()
+
+		for i in range(ncities):
+			if time.time() - start_time >= time_allowance:
+				break
+			currentCity = cities[i]
+			visited = set()
+			route = []
+
+			visited.add(currentCity)
+			route.append(currentCity)
+			breakEarly = False
+			for k in range(ncities - 1):
+				shortestPathSoFar = np.inf
+				shortestPathSoFarIndex = -1
+				for j in range(ncities):
+					# if city at j is not in visited, and if a path exists between currentCity and the cities[j], then
+					# compare it and update if needed.
+					if not cities[j] in visited:
+						if currentCity.costTo(cities[j]) < shortestPathSoFar:
+							shortestPathSoFar = currentCity.costTo(cities[j])
+							shortestPathSoFarIndex = j
+				if shortestPathSoFarIndex == -1:  # no path starting at city i
+					breakEarly = True
+					break
+				else:
+					currentCityIndex = shortestPathSoFarIndex
+					currentCity = cities[currentCityIndex]
+					visited.add(currentCity)
+					route.append(currentCity)
+			if (breakEarly):
+				continue
+
+			# check to see if it connects back! If it does, you can exit. If not, try again
+			if (currentCity.costTo(cities[i]) < np.inf):
+				tempSol = TSPSolution(route)
+				if (bssf == None or tempSol.cost < bssf.cost):
+					bssf = tempSol
+
+			i += 1
+
+		end_time = time.time()
+		results['cost'] = bssf.cost
+		results['time'] = end_time - start_time
+		results['count'] = count
+		results['soln'] = bssf
+		results['max'] = None
+		results['total'] = None
+		results['pruned'] = None
+		return results
 
 	''' <summary>
 		This is the entry point for the branch-and-bound algorithm that you will implement
@@ -93,94 +147,196 @@ class TSPSolver:
 	'''
 
 	def branchAndBound(self, time_allowance=60.0):
+		# Branch and bound TSP algorithm, branch to cover the search
+		# space, but prune branches that will be less than optimal. Priority
+		# of what to expand is determined using depth first, then bound.
 
 		results = {}
-		cities = self._scenario.getCities()
-		nCities = len(cities)
-		foundTour = False
-		count = 0
-		bssf = None
+
+		count = 0  # total number solutions found during search
+		max = 1  # max queue size
+		total = 1  # total number of states created
+		pruned = 0  # number of pruned states
+		updates = 0  # number of bssf updates
+
+		# Initial bssf using the greedy algorithm
+		greedyResults = self.greedy()  # Best case O(n^3) time, O(n^2) space, worst case O(n!)
+		bssf = greedyResults['soln']
+
 		start_time = time.time()
 
-		# Get initial bssf value using the randomTour function provided
-		randomTourResults = self.defaultRandomTour(60.0)
-		bssf = randomTourResults['cost']
+		# Prepare initial state - simplify initial matrix,
+		# get inital bound, add first city to path
+		matrix = self.initialMatrix()  # O(n^2) time and space
+		bound, matrix = self.simplifyMatrix(0, matrix)  # O(n^2) time and space
+		city = list(matrix.keys())[0]
+		city_path = [city]
+		index_path = [city._index]
 
-		# TODO: Make a PQ, use bssf to prune states based on their lowerbound produced with the function below
+		# Create state object, add to list and heapify
+		state = State(bound, matrix, city_path, index_path)  # O(1) time, O(n^2) space
+		PQ = [state]
+		heapq.heapify(PQ)  # O(1) time and space (because we only put one element in)
 
-		# This creates a square matrix array that is n x n cities big, all values initialized to zero
-		costMatrix = np.zeros((nCities, nCities))
+		# Run the algorithm until we find optimal or run out of time
+		# Loop is O(n^3) time and space for each iteration
+		# Number of iterations is O(b^n) on average, O((n-1)!) at worst (or until time limit)
+		while len(PQ) != 0 and time.time() - start_time < time_allowance:
 
-		# This for loop will add the cost to visit each city using the function costTo() found in the City class in TSPClasses.py
-		for i in range(nCities):  # This would be the rows
-			for j in range(nCities):  # This would be the columns
-				cost = City.costTo(cities[i], cities[j])
-				if cost != np.inf:
-					costMatrix[i][j] = cost
+			# Pop the highest priority state
+			state = heapq.heappop(PQ)
+			cost = state.bound
+
+			# Prune state if its bound is already worse than the bssf
+			if cost >= bssf.cost:
+				pruned += 1
+				continue
+
+			# Get all the information about the state to expand new states
+			matrix = state.matrix
+			city_path = state.path
+			index_path = state.index_path
+			city = city_path[-1]
+
+			# Loop over all the cities to consider all possible new states
+			# O(n^3) time and space
+			for i, c in enumerate(matrix[city]):  # loop runs O(n) times
+
+				# If we have already visited the city, move on
+				if i in index_path:  # O(n)
+					continue
+
+				# If the city is unreachable, don't expand that path (prune)
+				if c == math.inf:
+					pruned += 1
+					total += 1
+					continue
+
+				# Here the city is unvisited and reachable, let's explore
+				newCity = list(matrix.keys())[i]
+				newCost = cost + c
+				newPath = city_path + [newCity]  # O(1) time, O(n) space
+				newIndex = index_path + [i]  # O(1) time, O(n) space
+
+				# If this is the last city, and it makes a cycle, it's a solution
+				# O(1) time and space
+				if len(newPath) == len(matrix.keys()) and self.fullCycle(newPath, matrix):
+
+					# Add the cost of returning to the first city
+					newCost += matrix[newPath[-1]][newPath[0]._index]
+					count += 1
+
+					# Update the bssf if the new solution is better
+					if newCost < bssf.cost:
+						bssf = TSPSolution(newPath)
+						updates += 1
+					continue
+
+				# If still a partial path, update cost and matrix with city in path
+				newMatrix = self.StrikeOut(matrix, city, newCity)  # O(n^2) time and space
+				newCost, newMatrix = self.simplifyMatrix(newCost, newMatrix)  # O(n^2) time and space
+
+				# If the cost of the partial path is still less than the bssf
+				# create a new state and add it to the queue
+				if newCost < bssf.cost:
+					newState = State(newCost, newMatrix, newPath, newIndex)  # O(1) time, O(n^2) space
+					heapq.heappush(PQ, newState)
+					total += 1
+					if len(PQ) > max:
+						max = len(PQ)
+
+				# Otherwise, prune because it won't be optimal
 				else:
-					costMatrix[i][j] = np.inf
+					pruned += 1
+					total += 1
 
-		# reduceCostMatrix returns a dictionary that contains, the reduced matrix and the bound found
-		matrixData = self.reduceCostMatrix(nCities, costMatrix)
-		currentMatrix = matrixData['reduced']
-		# Create the parentState(Based off of the proj. specs), Consists of a matrix, bound, and partial tour
-		parentState = {}
-		parentState['bound'] = matrixData['bound']
-		parentState['matrix'] = matrixData['reduced']
-		parentState['tour'] = [0, 0]
+		end_time = time.time()
 
-		startCity = 0
-		heapq = PriorityQueue()
-		heapq.put(parentState)
+		# Prune the remaining items on the queue
+		pruned += len(PQ)
 
-		while heapq.empty() is not True:
-			parentState = heapq.get()
-			# Expand
-			for i in range(1, nCities):
-				if currentMatrix[startCity, i] != np.inf:
-					childBound = parentState['bound'] + currentMatrix[startCity, i]
+		# Tally up the results and return them
+		results['cost'] = bssf.cost
+		results['time'] = end_time - start_time
+		results['count'] = count
+		results['soln'] = bssf
+		results['max'] = max
+		results['total'] = total
+		results['pruned'] = pruned
 
-					# Since (startCity, i) was visited, we need to mark the matrix to say that we can no longer visit these cities, Make both row and column inf, using a copy of the parent matrix
-					childMatrix = np.copy(parentState['matrix'])
-					childMatrix[startCity:] = np.inf
-					childMatrix[:i] = np.inf
-					childMatrix[i:startCity] = np.inf
+		print(results)
+		print(updates)
 
-					# According to proj specs, after reducing matrix again, we create a new child state(Containing a matrix, bound, and partial tour), the tour is concatenated with the parentstate
-					newData = self.reduceCostMatrix(nCities, childMatrix)
-					childState = {}
-					childState['bound'] = childBound			# TODO: May need to set this to the bound computed in the reduceCostMatrix function
-					childState['matrix'] = newData['reduced']
-					childState['tour'] = np.concatenate((parentState['tour'], [startCity, i]))
+		return results
 
-					# Compare bound with the bssf to see if we should add the state to the queue
-					if childState['bound'] < bssf:
-						heapq.put(childState)
+	def initialMatrix(self):  # O(n^2) time and space
+		# Create the initial matrix by getting the value of each edge in the
+		# graph and putting it in a dictionary with city objects as the keys
+		# and a list of distances (in order of the cities) as the values
 
-			# Dequeue the most promising child state and follow the same process until a solution is found
+		cities = self._scenario.getCities()
+		matrix = {}
+		for city in cities:
+			matrix[city] = []
+			for city2 in cities:
+				matrix[city].append(city.costTo(city2))  # O(n^2) - nested for loops
+		return matrix
 
+	def simplifyMatrix(self, bound, matrix):  # O(n^2) time and space
+		# Simplify the matrix by subtracting the the minimum of each row from itself
+		# then the minumum of each column from itself, and add each minimum to the bound
+		# because its going to take at least those minumum values for the whole tour
 
+		newMatrix = {}
+		for city, weights in matrix.items():
+			minimum = min(weights)
+			if minimum == math.inf:
+				newWeights = [math.inf] * len(weights)
+			else:
+				bound += minimum
+				newWeights = []
+				for weight in weights:
+					newWeights.append(weight - minimum)  # O(n^2) - nested for loops
+			newMatrix[city] = newWeights
 
+		for city in newMatrix:
+			column = []
+			for city2, weights in newMatrix.items():
+				column.append(weights[city._index])  # O(n^2) - nested for loops
+			minimum = min(column)
+			if minimum == math.inf:
+				continue
+			bound += minimum
+			for city2, weights in newMatrix.items():
+				newMatrix[city2][city._index] -= minimum
 
+		return bound, newMatrix
 
+	def StrikeOut(self, matrix, city_from, city_to):  # O(n^2) time and space
+		# Change the row of the "from" city and the column of the "to"
+		# city to infinity to prevent coming from/to those cities again
+		# (also the cell that goes right back to the "from" city)
 
+		newMatrix = {}
+		for city, weights in matrix.items():
+			newWeights = []
+			for i, weight in enumerate(weights):
+				if city == city_from or i == city_to._index:
+					newWeights.append(math.inf)
+					continue
+				if city == city_to and i == city_from._index:
+					newWeights.append(math.inf)
+					continue
+				newWeights.append(weight)
 
+			newMatrix[city] = newWeights
 
+		return newMatrix
 
-
-
-		# heapq.put(stateOne)
-		# while heapq.empty() is not True:
-		# 	state = heapq.get()
-		# 	# TODO: make an expand function that will get the points to visit in the row
-		# 	if state['bound'] < bssf:
-		# 		rowOfCities = state['reduced'][0:]
-		# 		for city in rowOfCities:
-		# 			# TODO: make a test function that will calculate the bound value
-
-
-
-	# while not foundTour and time.time() - start_time < time_allowance:
+	def fullCycle(self, path, matrix):  # O(1) time and space
+		# Checks if the path makes a full cycle (does the last city
+		# have a path back to the first city), returns a boolean
+		return matrix[path[-1]][path[0]._index] != math.inf
 
 	''' <summary>
 		This is the entry point for the algorithm you'll write for your group project.
@@ -191,50 +347,54 @@ class TSPSolver:
 		algorithm</returns> 
 	'''
 
+	'''
+	1. Let 1 be the starting and ending point for salesman. 
+	2. Construct MST from with 1 as root using Prim’s Algorithm.
+	3. List vertices visited in preorder walk of the constructed MST and add 1 at the end. 
+	
+	'''
+
 	def fancy(self, time_allowance=60.0):
-		pass
+		results = {}
+		cities = self._scenario.getCities()
 
-	def reduceCostMatrix(self, numCities, matrixToReduce):
-		lowestCost = np.inf
-		bound = 0
-		data = {}
-		rowValue = 0
-		# This for loop will reduce the matrix by rows, finding the smallest value and then subtracting that value from each element in the row
-		# TODO: Modify to use np.min() function
-		# for k in range(numCities):
-		# 	listOfLowest = matrixToReduce.min(axis=1)
-		# 	for x in listOfLowest:
-		# 		rowValue = np.linspace(x, x, numCities)
-		# 		matrixToReduce[k] = np.subtract(matrixToReduce[k], rowValue)
-		# 		lowestCost = np.inf
-		# 		bound +=
-		for i in range(numCities):
-			for j in range(numCities):
-				if matrixToReduce[i][j] < lowestCost:
-					lowestCost = matrixToReduce[i][j]
-					bound += lowestCost
-			rowValue = np.linspace(lowestCost, lowestCost, numCities)
-			matrixToReduce[i] = np.subtract(matrixToReduce[i], rowValue)
-			lowestCost = np.inf
+		# Prim's
 
-		# This for loop will reduce the matrix column wise if there are no zeros in then column
-		for j in range(numCities):
-			zeroFound = False
-			lowestCost = np.inf
-			for i in range(numCities):
-				if matrixToReduce[i][j] == 0:
-					zeroFound = True
-					break
-				elif matrixToReduce[i][j] != np.inf:
-					if matrixToReduce[i][j] < lowestCost:
-						lowestCost = matrixToReduce[i][j]
-						bound += lowestCost
-			if not zeroFound:
-				columnValue = np.linspace(lowestCost, lowestCost, numCities)
+		# Main Function
 
-				matrixColum = matrixToReduce[:, j]
-				matrixToReduce[:, j] = np.subtract(matrixColum, columnValue)
+		# Cycle Check
 
-		data["reduced"] = matrixToReduce
-		data["bound"] = bound
-		return data
+		return results
+
+
+'''
+    def Prims(self, cities, startingIndex):
+        pass
+
+    def isCycle(self, cities, route):
+        pass
+'''
+
+
+
+
+
+
+
+
+
+
+class State():
+	# A state consists of a bound, matrix, and partial path (cities and indices)
+	# The priority of the state is a tuple with the depth (how many more cities need to be
+	# added to the path, i.e. lower number is better) and the bound (again, lower is better)
+	def __init__(self, bound, matrix, path, index_path): # O(1) time, O(n^2) space
+		self.bound = bound
+		self.matrix = matrix
+		self.path = path
+		self.index_path = index_path
+		self.priority = (len(matrix) - len(path), bound)
+
+	# A state is compared based on its priority (described above)
+	def __lt__(self, other): # O(1) time and space
+		return self.priority < other.priority
