@@ -403,7 +403,7 @@ class TSPSolver:
         return results
 
 
-class State():
+class State:
     # A state consists of a bound, matrix, and partial path (cities and indices)
     # The priority of the state is a tuple with the depth (how many more cities need to be
     # added to the path, i.e. lower number is better) and the bound (again, lower is better)
